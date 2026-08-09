@@ -88,6 +88,27 @@
     }
     #hero-video.ready { opacity: 1; }
 
+    /* ── PERMANENT GRADIENT OVERLAY ─────────────
+       Sticks with the video at all times — always visible regardless
+       of which phase is active. Prevents the raw-video flash between phases.
+       margin-top: -100vh pulls it back up to overlap the video in flow.
+    ─────────────────────────────────────────── */
+    #sv-overlay {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      margin-top: -100vh;   /* sit on top of the video, not below it */
+      z-index: 2;
+      pointer-events: none;
+      background:
+        /* bottom vignette — always darkens where text will sit */
+        linear-gradient(to top,  rgba(0,0,0,.62) 0%, rgba(0,0,0,.08) 42%, transparent 62%),
+        /* left vignette — consistent edge treatment */
+        linear-gradient(to right, rgba(0,0,0,.28) 0%, transparent 52%),
+        /* corner vignette — subtle cinematic frame */
+        radial-gradient(ellipse at center, transparent 45%, rgba(0,0,0,.18) 100%);
+    }
+
     /* ── PHASE OVERLAYS ──────────────────────── */
     .phase {
       position: absolute;
@@ -96,21 +117,12 @@
       display: flex;
       align-items: flex-end;
       padding: 0 60px 80px;
-      z-index: 2;
+      z-index: 3;           /* above the permanent overlay */
       pointer-events: none;
     }
 
-    /*
-      Cinematic gradient: stronger at bottom where text sits,
-      fades to nothing by the upper third — video reads clearly above.
-    */
-    .phase::before {
-      content: '';
-      position: absolute; inset: 0;
-      background:
-        linear-gradient(to top,  rgba(0,0,0,.72) 0%, rgba(0,0,0,.15) 40%, transparent 65%),
-        linear-gradient(to right, rgba(0,0,0,.35) 0%, transparent 55%);
-    }
+    /* No per-phase gradient — the permanent overlay handles it */
+    .phase::before { content: none; }
 
     /* ── PHASE CARD ──────────────────────────── */
     .phase-card {
@@ -272,6 +284,8 @@
     <video id="hero-video" muted playsinline preload="auto">
       <source src="./hero.mp4" type="video/mp4">
     </video>
+    <!-- Permanent gradient overlay — always visible, sticks with the video -->
+    <div id="sv-overlay"></div>
   </div>
 
   <section class="modules" id="modules">
