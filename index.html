@@ -171,6 +171,36 @@
       display: flex; align-items: center; justify-content: space-between;
     }
     footer p { font-size: 11px; font-weight: 300; color: rgba(255,255,255,.18); }
+
+    /* ── MOBILE ──────────────────────────────── */
+    @media (max-width: 768px) {
+      /* Nav */
+      nav { padding: 20px 24px; }
+      .nav-r a:not(.cta) { display: none; }
+      .nav-r .cta { padding: 7px 16px; font-size: 10px; }
+
+      /* Phase cards */
+      .phase { padding: 0 24px 56px; }
+      .phase::before {
+        background: linear-gradient(to top, rgba(0,0,0,.7) 0%, rgba(0,0,0,.1) 60%, transparent 100%);
+      }
+      .phase-card { max-width: 100%; }
+      .phase-t { font-size: clamp(26px, 7vw, 36px); }
+      .phase-b { font-size: 13px; }
+
+      /* Modules */
+      .modules { padding: 64px 24px 80px; }
+      .cards { grid-template-columns: 1fr; }
+      .card {
+        border-right: none;
+        border-bottom: 1px solid rgba(255,255,255,.07);
+      }
+      .card:last-child { border-bottom: none; }
+      .card { padding: 36px 28px 44px; }
+
+      /* Footer */
+      footer { padding: 28px 24px; flex-direction: column; gap: 10px; text-align: center; }
+    }
   </style>
 </head>
 <body>
