@@ -246,10 +246,6 @@
       #counter { bottom: 20px; right: 24px; }
 
       .phase { padding: 0 24px 56px; align-items: flex-end; }
-      .phase::before {
-        background:
-          linear-gradient(to top, rgba(0,0,0,.78) 0%, rgba(0,0,0,.2) 50%, transparent 70%);
-      }
       .phase-card { max-width: 100%; }
       .phase-t { font-size: clamp(24px, 7vw, 34px); }
       .phase-b { font-size: 13px; }
@@ -407,15 +403,9 @@
        Threshold 0.008s ≈ quarter-frame at 30fps — skip micro-updates
        that would just hammer the video decoder for no visual gain.
     ─────────────────────────────────────────── */
-    let targetTime  = 0;
-    let scrollDir   = 1;
-    let lastScrollY = 0;
+    let targetTime = 0;
 
     function onScroll() {
-      const sy   = window.scrollY;
-      scrollDir  = sy >= lastScrollY ? 1 : -1;
-      lastScrollY = sy;
-
       const rect     = wrap.getBoundingClientRect();
       const scrolled = -rect.top;
       const total    = wrap.offsetHeight - window.innerHeight;
@@ -423,8 +413,14 @@
 
       targetTime = progress * (video.duration || 43);
 
-      /* Progress bar */
+      /* Progress bar height */
       prog.style.height = (progress * 100) + '%';
+
+      /* Hide progress bar + counter once user has scrolled past the video section */
+      const inSection = scrolled >= 0 && progress < 1;
+      const vis = inSection ? '1' : '0';
+      prog.style.opacity   = vis;
+      counter.style.opacity = vis;
     }
 
     window.addEventListener('scroll', onScroll, { passive: true });
