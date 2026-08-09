@@ -436,11 +436,27 @@
       prevNow   = now;
 
       if (video.readyState >= 2) {
-        const diff   = targetTime - video.currentTime;
-        const factor = diff >= 0 ? 8 : 5;
-        const step   = diff * Math.min(1, dt * factor);
-        if (Math.abs(step) > 0.008) {
-          video.currentTime += step;
+        const diff = targetTime - video.currentTime;
+
+        if (Math.abs(diff) > 0.5) {
+          /*
+            Large jump — scrollbar click, fast drag, or page-jump.
+            Lerping through the gap would hammer the decoder with hundreds
+            of intermediate seeks, causing the jitter the user sees.
+            Snap directly: one seek, one decode, done.
+          */
+          video.currentTime = targetTime;
+        } else {
+          /*
+            Normal incremental scroll — smooth lerp.
+            Forward: factor 8 (snappy), backward: factor 5 (gentle).
+            Step threshold 0.008s ≈ ¼ frame — avoids micro-seeks.
+          */
+          const factor = diff >= 0 ? 8 : 5;
+          const step   = diff * Math.min(1, dt * factor);
+          if (Math.abs(step) > 0.008) {
+            video.currentTime += step;
+          }
         }
       }
 
