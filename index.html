@@ -11,7 +11,6 @@
 
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
     html { scroll-behavior: smooth; }
 
     body {
@@ -22,188 +21,138 @@
       -webkit-font-smoothing: antialiased;
     }
 
-    /* ── NAV ─────────────────────────────────── */
+    /* ── NAV — always transparent ───────────── */
     nav {
       position: fixed; top: 0; left: 0; right: 0; z-index: 100;
       padding: 28px 56px;
       display: flex; align-items: center; justify-content: space-between;
-      transition: padding .3s, background .3s;
-    }
-    nav.s {
-      padding: 16px 56px;
-      background: rgba(0,0,0,.88);
-      backdrop-filter: blur(20px);
-      border-bottom: 1px solid rgba(255,255,255,.08);
     }
     .logo {
       font-family: 'Space Grotesk', sans-serif;
-      font-size: 15px; font-weight: 700; letter-spacing: .22em;
+      font-size: 14px; font-weight: 700; letter-spacing: .24em;
       text-transform: uppercase; color: #fff; text-decoration: none;
     }
-    .nav-links { display: flex; align-items: center; gap: 40px; }
+    .nav-links { display: flex; align-items: center; gap: 36px; }
     .nav-links a {
       font-size: 11px; font-weight: 400; letter-spacing: .12em;
-      text-transform: uppercase; color: rgba(255,255,255,.4);
+      text-transform: uppercase; color: rgba(255,255,255,.35);
       text-decoration: none; transition: color .2s;
     }
     .nav-links a:hover { color: #fff; }
-    .nav-links .btn {
-      color: #000; background: #fff;
-      font-weight: 500; padding: 9px 22px;
-      transition: opacity .2s;
+    .nav-links .cta {
+      color: #fff; border: 1px solid rgba(255,255,255,.25);
+      padding: 8px 22px; transition: background .2s, border-color .2s;
     }
-    .nav-links .btn:hover { opacity: .85; }
+    .nav-links .cta:hover { background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.5); }
 
-    /* ── HERO ────────────────────────────────── */
-    .hero {
-      height: 100vh;
-      display: flex; flex-direction: column;
-      align-items: center; justify-content: center;
-      text-align: center; padding: 0 32px;
-    }
-    .hero-label {
-      font-size: 10px; font-weight: 400; letter-spacing: .32em;
-      text-transform: uppercase; color: rgba(255,255,255,.35);
-      margin-bottom: 36px;
-    }
-    .hero h1 {
-      font-family: 'Space Grotesk', sans-serif;
-      font-size: clamp(52px, 8vw, 108px);
-      font-weight: 700; line-height: .96; letter-spacing: -.04em;
-      margin-bottom: 28px;
-    }
-    .hero p {
-      font-size: 16px; font-weight: 300; line-height: 1.8;
-      color: rgba(255,255,255,.4); max-width: 400px;
-      margin-bottom: 48px;
-    }
-    .hero-btns { display: flex; gap: 12px; }
-    .btn-w {
-      font-size: 11px; font-weight: 500; letter-spacing: .12em;
-      text-transform: uppercase; color: #000; background: #fff;
-      padding: 13px 32px; text-decoration: none; transition: opacity .2s;
-    }
-    .btn-w:hover { opacity: .85; }
-    .btn-o {
-      font-size: 11px; font-weight: 400; letter-spacing: .12em;
-      text-transform: uppercase; color: rgba(255,255,255,.45);
-      border: 1px solid rgba(255,255,255,.12);
-      padding: 13px 28px; text-decoration: none; transition: color .2s, border-color .2s;
-    }
-    .btn-o:hover { color: #fff; border-color: rgba(255,255,255,.3); }
+    /* ── SCROLLY VIDEO — the whole show ─────── */
+    /*
+      #sv-container has no height set — it grows as JS appends .phase divs (each 100vh).
+      ScrollyVideo appends its sticky canvas inside; phases scroll over the pinned video.
+    */
+    #sv-container { background: #000; }
 
-    .scroll-ind {
-      position: absolute; bottom: 36px; left: 50%; transform: translateX(-50%);
-      font-size: 9px; letter-spacing: .28em; text-transform: uppercase;
-      color: rgba(255,255,255,.2); display: flex; flex-direction: column;
-      align-items: center; gap: 10px;
-    }
-    .scroll-bar {
-      width: 1px; height: 40px;
-      background: linear-gradient(to bottom, rgba(255,255,255,.5), transparent);
-      animation: sb 2s ease-in-out infinite;
-    }
-    @keyframes sb {
-      0%,100% { transform: scaleY(0); transform-origin: top; opacity: 0; }
-      50% { transform: scaleY(1); transform-origin: top; opacity: 1; }
-    }
-
-    /* ── SCROLLY VIDEO ───────────────────────── */
-    #sv-container {
-      background: #000;
-      position: relative;
-      z-index: 1;
-    }
-
+    /* First phase doubles as the hero — tall enough to be a landing screen */
     .phase {
       height: 100vh;
       display: flex; align-items: flex-end;
-      padding: 0 64px 72px;
+      padding: 0 64px 80px;
       position: relative; z-index: 5;
       pointer-events: none;
     }
+
+    /* Very subtle gradient — just enough for text legibility, not hiding video */
     .phase::before {
       content: '';
       position: absolute; inset: 0;
-      background: linear-gradient(to right, rgba(0,0,0,.7) 0%, transparent 50%);
+      background: linear-gradient(to right, rgba(0,0,0,.45) 0%, transparent 48%);
     }
+
     .phase-card {
-      max-width: 440px; position: relative;
-      opacity: 0; transform: translateY(16px);
-      transition: opacity .5s ease, transform .5s ease;
+      max-width: 420px; position: relative;
+      opacity: 0; transform: translateY(14px);
+      transition: opacity .55s ease, transform .55s ease;
       pointer-events: auto;
     }
     .phase.on .phase-card { opacity: 1; transform: translateY(0); }
 
     .phase-n {
-      font-size: 10px; font-weight: 400; letter-spacing: .28em;
-      text-transform: uppercase; color: rgba(255,255,255,.35);
+      font-size: 10px; font-weight: 400; letter-spacing: .3em;
+      text-transform: uppercase; color: rgba(255,255,255,.4);
       margin-bottom: 16px;
     }
     .phase-t {
       font-family: 'Space Grotesk', sans-serif;
-      font-size: clamp(28px, 3.2vw, 46px);
-      font-weight: 700; line-height: 1.08; letter-spacing: -.03em;
+      font-size: clamp(30px, 3.6vw, 50px);
+      font-weight: 700; line-height: 1.06; letter-spacing: -.03em;
       color: #fff; margin-bottom: 16px;
-      text-shadow: 0 2px 32px rgba(0,0,0,.8);
+      text-shadow: 0 1px 40px rgba(0,0,0,.9);
     }
     .phase-b {
       font-size: 14px; font-weight: 300; line-height: 1.85;
-      color: rgba(255,255,255,.45);
-      text-shadow: 0 1px 12px rgba(0,0,0,.9);
+      color: rgba(255,255,255,.5);
+      text-shadow: 0 1px 16px rgba(0,0,0,.95);
     }
 
-    /* ── MODULES ─────────────────────────────── */
+    /* ── AFTER VIDEO: glass panels, video frame shows through ── */
     .modules {
       position: relative; z-index: 10;
-      background: #000;
-      border-top: 1px solid rgba(255,255,255,.08);
-      padding: 120px 56px;
+      /* no solid background — video last frame visible beneath */
+      padding: 100px 56px 120px;
     }
+
+    /* frost panel behind the module content */
+    .modules-inner {
+      background: rgba(0,0,0,.55);
+      backdrop-filter: blur(28px);
+      -webkit-backdrop-filter: blur(28px);
+      border: 1px solid rgba(255,255,255,.07);
+      padding: 72px 56px;
+      max-width: 1160px;
+    }
+
     .sec-label {
       font-size: 10px; font-weight: 400; letter-spacing: .3em;
       text-transform: uppercase; color: rgba(255,255,255,.28);
-      margin-bottom: 20px;
+      margin-bottom: 16px;
     }
     .sec-title {
       font-family: 'Space Grotesk', sans-serif;
-      font-size: clamp(30px, 4vw, 52px);
+      font-size: clamp(28px, 3.5vw, 48px);
       font-weight: 700; letter-spacing: -.035em; line-height: 1.05;
-      margin-bottom: 80px;
+      margin-bottom: 64px;
     }
     .cards {
       display: grid; grid-template-columns: repeat(3, 1fr);
-      max-width: 1100px; gap: 0;
-      border: 1px solid rgba(255,255,255,.08);
+      gap: 0; border: 1px solid rgba(255,255,255,.07);
     }
     .card {
-      padding: 48px 40px 56px;
-      border-right: 1px solid rgba(255,255,255,.08);
-      transition: background .3s;
+      padding: 40px 36px 48px;
+      border-right: 1px solid rgba(255,255,255,.07);
     }
     .card:last-child { border-right: none; }
-    .card:hover { background: rgba(255,255,255,.02); }
     .card-n {
       font-size: 10px; font-weight: 400; letter-spacing: .2em;
-      color: rgba(255,255,255,.2); margin-bottom: 52px;
+      color: rgba(255,255,255,.2); margin-bottom: 40px;
     }
     .card-t {
       font-family: 'Space Grotesk', sans-serif;
-      font-size: 19px; font-weight: 600; letter-spacing: -.01em;
-      margin-bottom: 14px;
+      font-size: 18px; font-weight: 600; letter-spacing: -.01em;
+      margin-bottom: 12px;
     }
     .card-d {
       font-size: 13px; font-weight: 300; line-height: 1.85;
-      color: rgba(255,255,255,.38);
+      color: rgba(255,255,255,.35);
     }
 
-    /* ── FOOTER ──────────────────────────────── */
+    /* ── FOOTER — transparent ────────────────── */
     footer {
       position: relative; z-index: 10;
-      background: #000;
-      border-top: 1px solid rgba(255,255,255,.08);
-      padding: 40px 56px;
+      padding: 32px 56px;
+      border-top: 1px solid rgba(255,255,255,.06);
       display: flex; align-items: center; justify-content: space-between;
+      background: rgba(0,0,0,.6);
+      backdrop-filter: blur(20px);
     }
     footer p {
       font-size: 11px; font-weight: 300; color: rgba(255,255,255,.2);
@@ -212,67 +161,51 @@
 </head>
 <body>
 
-  <!-- NAV -->
-  <nav id="nav">
+  <!-- NAV — floats over the video -->
+  <nav>
     <a href="#" class="logo">Nexus</a>
     <div class="nav-links">
       <a href="#modules">Modules</a>
-      <a href="#sv-container">Platform</a>
-      <a href="#" class="btn">Get Access</a>
+      <a href="#" class="cta">Get Access</a>
     </div>
   </nav>
 
-  <!-- HERO -->
-  <section class="hero" style="position:relative">
-    <div class="hero-label">Industrial Intelligence Platform</div>
-    <h1>Move faster.<br>Think clearer.</h1>
-    <p>One autonomous system connecting every node of your operation — from factory floor to final mile.</p>
-    <div class="hero-btns">
-      <a href="#sv-container" class="btn-w">See It Work</a>
-      <a href="#modules" class="btn-o">Explore</a>
-    </div>
-    <div class="scroll-ind"><span>Scroll</span><div class="scroll-bar"></div></div>
-  </section>
-
-  <!-- SCROLLY VIDEO -->
+  <!-- SCROLLY VIDEO — the entire experience -->
   <div id="sv-container"></div>
 
-  <!-- MODULES -->
+  <!-- MODULES — glass panel floating over last video frame -->
   <section class="modules" id="modules">
-    <div class="sec-label">Platform Modules</div>
-    <div class="sec-title">One system.<br>Every layer.</div>
-    <div class="cards">
-      <div class="card">
-        <div class="card-n">01</div>
-        <div class="card-t">NEXUS Sense</div>
-        <p class="card-d">Industrial IoT fabric that ingests sensor data from any device, protocol, or manufacturer — normalised and contextualised at the edge.</p>
-      </div>
-      <div class="card">
-        <div class="card-n">02</div>
-        <div class="card-t">NEXUS Mind</div>
-        <p class="card-d">Autonomous decision engine powered by reinforcement learning. Adapts to your operational patterns and optimises in real time.</p>
-      </div>
-      <div class="card">
-        <div class="card-n">03</div>
-        <div class="card-t">NEXUS Flow</div>
-        <p class="card-d">End-to-end orchestration that coordinates every resource across every location — eliminating idle time and disconnected systems.</p>
+    <div class="modules-inner">
+      <div class="sec-label">Platform Modules</div>
+      <div class="sec-title">One system. Every layer.</div>
+      <div class="cards">
+        <div class="card">
+          <div class="card-n">01</div>
+          <div class="card-t">NEXUS Sense</div>
+          <p class="card-d">Industrial IoT fabric that ingests sensor data from any device, protocol, or manufacturer — normalised at the edge.</p>
+        </div>
+        <div class="card">
+          <div class="card-n">02</div>
+          <div class="card-t">NEXUS Mind</div>
+          <p class="card-d">Autonomous decision engine powered by reinforcement learning. Adapts to your patterns and optimises in real time.</p>
+        </div>
+        <div class="card">
+          <div class="card-n">03</div>
+          <div class="card-t">NEXUS Flow</div>
+          <p class="card-d">End-to-end orchestration that coordinates every resource across every location — eliminating idle time and chaos.</p>
+        </div>
       </div>
     </div>
   </section>
 
   <!-- FOOTER -->
   <footer>
-    <span class="logo" style="font-size:13px">Nexus</span>
+    <span class="logo">Nexus</span>
     <p>© 2024 NEXUS Systems, Inc.</p>
   </footer>
 
   <script>
-    /* Nav scroll */
-    window.addEventListener('scroll', () => {
-      document.getElementById('nav').classList.toggle('s', window.scrollY > 40);
-    }, { passive: true });
-
-    /* ScrollyVideo */
+    /* ScrollyVideo — video is everything */
     new ScrollyVideo({
       scrollyVideoContainer: 'sv-container',
       src: './hero.mp4',
@@ -285,13 +218,18 @@
       transitionSpeed: 8,
     });
 
-    /* Phase cards */
+    /* Build phase cards — first phase acts as hero screen */
     const svc = document.getElementById('sv-container');
     [
       {
+        n: '',
+        t: 'Industrial AI\nthat thinks\nwhile you move.',
+        b: 'One autonomous system connecting every node of your operation — from factory floor to final mile.'
+      },
+      {
         n: '01 — Sense',
-        t: 'Intelligence starts\nat the edge.',
-        b: 'NEXUS Sense embeds into your physical environment — machines, sensors, cameras — capturing every data point the moment it happens.'
+        t: 'Intelligence\nat the edge.',
+        b: 'NEXUS Sense embeds into your environment — machines, sensors, cameras — capturing every data point the moment it happens.'
       },
       {
         n: '02 — Process',
@@ -300,7 +238,7 @@
       },
       {
         n: '03 — Orchestrate',
-        t: 'Everything moves\nas one.',
+        t: 'Everything\nmoves as one.',
         b: 'NEXUS Flow coordinates every resource across every location — eliminating idle time, conflicting orders, and chaos.'
       },
     ].forEach(p => {
@@ -308,14 +246,14 @@
       div.className = 'phase';
       div.innerHTML = `
         <div class="phase-card">
-          <div class="phase-n">${p.n}</div>
+          ${p.n ? `<div class="phase-n">${p.n}</div>` : ''}
           <h2 class="phase-t">${p.t.replace(/\n/g, '<br>')}</h2>
           <p class="phase-b">${p.b}</p>
         </div>`;
       svc.appendChild(div);
     });
 
-    /* Fade cards in as each phase enters viewport */
+    /* Fade each card in as its phase enters view */
     const obs = new IntersectionObserver(entries => {
       entries.forEach(e => e.target.classList.toggle('on', e.isIntersecting));
     }, { threshold: 0.3 });
