@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NEXUS — WebCodecs</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&family=Space+Grotesk:wght@600;700&display=swap" />
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: #000;
+      color: #fff;
+      font-family: 'Inter', sans-serif;
+      overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── NAV ─────────────────────────────────── */
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      padding: 28px 52px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .logo {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 13px; font-weight: 700; letter-spacing: .26em;
+      text-transform: uppercase; color: #fff; text-decoration: none;
+    }
+    .nav-r { display: flex; align-items: center; gap: 32px; }
+    .nav-r a {
+      font-size: 10px; font-weight: 400; letter-spacing: .14em;
+      text-transform: uppercase; color: rgba(255,255,255,.32);
+      text-decoration: none; transition: color .25s;
+    }
+    .nav-r a:hover { color: #fff; }
+    .nav-r .cta {
+      color: rgba(255,255,255,.7);
+      border: 1px solid rgba(255,255,255,.18);
+      padding: 8px 20px;
+      transition: color .25s, border-color .25s;
+    }
+    .nav-r .cta:hover { color: #fff; border-color: rgba(255,255,255,.45); }
+
+    /* ── LOAD BAR ────────────────────────────── */
+    #load-bar-wrap {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 101;
+      height: 2px; background: rgba(255,255,255,.07);
+      transition: opacity .6s .3s;
+    }
+    #load-bar-wrap.done { opacity: 0; }
+    #load-bar {
+      height: 100%; width: 0%;
+      background: rgba(255,255,255,.5);
+      transition: width .12s linear;
+    }
+
+    /* ── BADGE ───────────────────────────────── */
+    #method-badge {
+      position: fixed; bottom: 36px; left: 48px; z-index: 99;
+      font-size: 9px; letter-spacing: .22em; text-transform: uppercase;
+      color: rgba(255,255,255,.18); pointer-events: none;
+    }
+
+    /* ── SCROLL PROGRESS BAR ─────────────────── */
+    #prog {
+      position: fixed; left: 0; top: 0;
+      width: 2px; height: 0%;
+      background: rgba(255,255,255,.55);
+      z-index: 99; transition: height .05s linear;
+      pointer-events: none;
+    }
+
+    /* ── PHASE COUNTER ───────────────────────── */
+    #counter {
+      position: fixed; bottom: 36px; right: 48px; z-index: 99;
+      font-size: 10px; font-weight: 400; letter-spacing: .2em;
+      color: rgba(255,255,255,.25); pointer-events: none;
+      transition: opacity .4s;
+    }
+
+    /* ── VIDEO SCROLL SECTION ────────────────── */
+    #sv-wrap { position: relative; min-height: 500vh; }
+
+    #hero-canvas {
+      position: sticky; top: 0;
+      width: 100%; height: 100vh;
+      display: block; z-index: 1;
+      opacity: 0; transition: opacity .8s ease;
+    }
+    #hero-canvas.ready { opacity: 1; }
+
+    /* Fallback video — hidden, used only when WebCodecs unavailable */
+    #hero-video {
+      position: absolute; width: 1px; height: 1px;
+      opacity: 0; pointer-events: none;
+    }
+
+    /* ── PERMANENT GRADIENT OVERLAY ─────────────── */
+    #sv-overlay {
+      position: sticky; top: 0; height: 100vh;
+      margin-top: -100vh; z-index: 2; pointer-events: none;
+      background:
+        linear-gradient(to top,  rgba(0,0,0,.62) 0%, rgba(0,0,0,.08) 42%, transparent 62%),
+        linear-gradient(to right, rgba(0,0,0,.28) 0%, transparent 52%),
+        radial-gradient(ellipse at center, transparent 45%, rgba(0,0,0,.18) 100%);
+    }
+
+    /* ── PHASE OVERLAYS ──────────────────────── */
+    .phase {
+      position: absolute; width: 100%; height: 100vh;
+      display: flex; align-items: flex-end;
+      padding: 0 60px 80px; z-index: 3; pointer-events: none;
+    }
+    .phase::before { content: none; }
+    .phase-card { position: relative; max-width: 460px; pointer-events: auto; }
+
+    .phase-n, .phase-t, .phase-b {
+      opacity: 0; transform: translateY(14px);
+      will-change: opacity, transform;
+    }
+    .phase-n {
+      font-size: 10px; font-weight: 400; letter-spacing: .3em;
+      text-transform: uppercase; color: rgba(255,255,255,.38);
+      margin-bottom: 14px;
+      transition: opacity .5s ease 0s, transform .5s ease 0s;
+    }
+    .phase-t {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: clamp(28px, 3.6vw, 50px);
+      font-weight: 700; line-height: 1.06; letter-spacing: -.03em;
+      color: #fff; margin-bottom: 16px;
+      text-shadow: 0 2px 48px rgba(0,0,0,.9);
+      transition: opacity .55s ease .12s, transform .55s ease .12s;
+    }
+    .phase-b {
+      font-size: 14px; font-weight: 300; line-height: 1.85;
+      color: rgba(255,255,255,.48);
+      text-shadow: 0 1px 20px rgba(0,0,0,.9);
+      transition: opacity .5s ease .26s, transform .5s ease .26s;
+    }
+    .phase.on .phase-n, .phase.on .phase-t, .phase.on .phase-b {
+      opacity: 1; transform: translateY(0);
+    }
+    .phase.exit-up .phase-n, .phase.exit-up .phase-t, .phase.exit-up .phase-b {
+      opacity: 0; transform: translateY(-10px); transition-delay: 0s;
+    }
+
+    /* ── MODULES ─────────────────────────────── */
+    .modules {
+      position: relative; z-index: 10;
+      background: rgba(4,4,6,.9);
+      backdrop-filter: blur(40px); -webkit-backdrop-filter: blur(40px);
+      border-top: 1px solid rgba(255,255,255,.06);
+      padding: 100px 52px 120px;
+    }
+    .sec-label {
+      font-size: 10px; font-weight: 400; letter-spacing: .32em;
+      text-transform: uppercase; color: rgba(255,255,255,.22); margin-bottom: 16px;
+    }
+    .sec-title {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: clamp(26px, 3.2vw, 48px);
+      font-weight: 700; letter-spacing: -.035em; line-height: 1.05; margin-bottom: 64px;
+    }
+    .cards {
+      display: grid; grid-template-columns: repeat(3, 1fr);
+      max-width: 1100px; border: 1px solid rgba(255,255,255,.07);
+    }
+    .card {
+      padding: 44px 36px 52px;
+      border-right: 1px solid rgba(255,255,255,.07); transition: background .3s;
+    }
+    .card:last-child { border-right: none; }
+    .card:hover { background: rgba(255,255,255,.022); }
+    .card-n {
+      font-size: 10px; font-weight: 400; letter-spacing: .22em;
+      color: rgba(255,255,255,.16); margin-bottom: 44px;
+    }
+    .card-t {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 17px; font-weight: 600; letter-spacing: -.01em; margin-bottom: 12px;
+    }
+    .card-d { font-size: 13px; font-weight: 300; line-height: 1.85; color: rgba(255,255,255,.3); }
+
+    /* ── FOOTER ──────────────────────────────── */
+    footer {
+      position: relative; z-index: 10;
+      background: rgba(2,2,4,.94);
+      border-top: 1px solid rgba(255,255,255,.05);
+      padding: 34px 52px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    footer p { font-size: 11px; font-weight: 300; color: rgba(255,255,255,.16); }
+
+    /* ── MOBILE ──────────────────────────────── */
+    @media (max-width: 768px) {
+      nav { padding: 20px 24px; }
+      .nav-r a:not(.cta) { display: none; }
+      .nav-r .cta { padding: 7px 16px; font-size: 10px; }
+      #counter { bottom: 20px; right: 24px; }
+      #method-badge { display: none; }
+      .phase { padding: 0 24px 56px; }
+      .phase-card { max-width: 100%; }
+      .phase-t { font-size: clamp(24px, 7vw, 34px); }
+      .phase-b { font-size: 13px; }
+      .modules { padding: 60px 24px 76px; }
+      .cards { grid-template-columns: 1fr; }
+      .card { border-right: none; border-bottom: 1px solid rgba(255,255,255,.07); padding: 32px 24px 40px; }
+      .card:last-child { border-bottom: none; }
+      footer { padding: 26px 24px; flex-direction: column; gap: 8px; text-align: center; }
+    }
+  </style>
+</head>
+<body>
+
+  <div id="load-bar-wrap"><div id="load-bar"></div></div>
+  <div id="prog"></div>
+  <div id="counter">01 / 04</div>
+  <div id="method-badge">WebCodecs VideoDecoder</div>
+
+  <nav>
+    <a href="#" class="logo">Nexus</a>
+    <div class="nav-r">
+      <a href="#modules">Modules</a>
+      <a href="./index.html" style="color:rgba(255,255,255,.55);border-bottom:1px solid rgba(255,255,255,.2);padding-bottom:2px;">← Native Video</a>
+      <a href="#" class="cta">Get Access</a>
+    </div>
+  </nav>
+
+  <div id="sv-wrap">
+    <canvas id="hero-canvas"></canvas>
+    <video id="hero-video" muted playsinline preload="auto">
+      <source src="./hero.mp4" type="video/mp4">
+    </video>
+    <div id="sv-overlay"></div>
+  </div>
+
+  <section class="modules" id="modules">
+    <div class="sec-label">Platform Modules</div>
+    <div class="sec-title">One system. Every layer.</div>
+    <div class="cards">
+      <div class="card">
+        <div class="card-n">01</div>
+        <div class="card-t">NEXUS Sense</div>
+        <p class="card-d">Industrial IoT fabric ingesting sensor data from any device, protocol, or manufacturer — normalised at the edge.</p>
+      </div>
+      <div class="card">
+        <div class="card-n">02</div>
+        <div class="card-t">NEXUS Mind</div>
+        <p class="card-d">Autonomous decision engine powered by reinforcement learning. Adapts to your patterns and optimises in real time.</p>
+      </div>
+      <div class="card">
+        <div class="card-n">03</div>
+        <div class="card-t">NEXUS Flow</div>
+        <p class="card-d">End-to-end orchestration coordinating every resource across every location — eliminating idle time and chaos.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <span class="logo">Nexus</span>
+    <p>© 2024 NEXUS Systems, Inc.</p>
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/mp4box@0.5.2/dist/mp4box.all.min.js"></script>
+  <script>
+    const canvas   = document.getElementById('hero-canvas');
+    const ctx      = canvas.getContext('2d');
+    const video    = document.getElementById('hero-video');
+    const wrap     = document.getElementById('sv-wrap');
+    const prog     = document.getElementById('prog');
+    const counter  = document.getElementById('counter');
+    const loadWrap = document.getElementById('load-bar-wrap');
+    const loadBar  = document.getElementById('load-bar');
+
+    /* ── Canvas sizing ─────────────────────────────────────── */
+    function resizeCanvas() {
+      canvas.width  = canvas.clientWidth  * devicePixelRatio;
+      canvas.height = canvas.clientHeight * devicePixelRatio;
+    }
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+
+    /* ── Phases ─────────────────────────────────────────────── */
+    const PHASES = [
+      {
+        n: '',
+        t: 'Industrial AI\nthat thinks\nwhile you move.',
+        b: 'One autonomous system connecting every node of your operation — from factory floor to final mile.'
+      },
+      {
+        n: '01 — Sense',
+        t: 'Intelligence\nat the edge.',
+        b: 'NEXUS Sense embeds into your environment — machines, sensors, cameras — capturing every data point the moment it happens.'
+      },
+      {
+        n: '02 — Process',
+        t: 'Decisions in\nmilliseconds.',
+        b: 'Our on-device AI evaluates millions of variables per second, routing the right response before any problem becomes visible.'
+      },
+      {
+        n: '03 — Orchestrate',
+        t: 'Everything\nmoves as one.',
+        b: 'NEXUS Flow coordinates every resource across every location — eliminating idle time, conflicting orders, and chaos.'
+      },
+    ];
+
+    /* ── Shared state ─────────────────────────────────────── */
+    let targetTime    = 0;
+    let videoDuration = 43;
+
+    /* ── Build scroll phases ──────────────────────────────── */
+    function build(duration) {
+      videoDuration = duration;
+      const VH     = window.innerHeight;
+      const totalH = Math.round(duration * 150) + VH;
+      wrap.style.height = totalH + 'px';
+
+      const usable = totalH * 0.88;
+      const step   = usable / PHASES.length;
+
+      PHASES.forEach((p, i) => {
+        const el = document.createElement('div');
+        el.className = 'phase';
+        el.style.top = Math.round(i * step) + 'px';
+        el.innerHTML = `
+          <div class="phase-card">
+            ${p.n ? `<div class="phase-n">${p.n}</div>` : ''}
+            <h2 class="phase-t">${p.t.replace(/\n/g, '<br>')}</h2>
+            <p class="phase-b">${p.b}</p>
+          </div>`;
+        wrap.appendChild(el);
+      });
+
+      const obs = new IntersectionObserver(entries => {
+        entries.forEach(e => {
+          const el  = e.target;
+          const idx = [...document.querySelectorAll('.phase')].indexOf(el);
+          if (e.isIntersecting) {
+            el.classList.remove('exit-up');
+            el.classList.add('on');
+            counter.textContent =
+              String(idx + 1).padStart(2, '0') + ' / ' +
+              String(PHASES.length).padStart(2, '0');
+          } else {
+            if (e.boundingClientRect.top < 0) el.classList.add('exit-up');
+            el.classList.remove('on');
+          }
+        });
+      }, { rootMargin: '-30% 0px -30% 0px', threshold: 0 });
+
+      document.querySelectorAll('.phase').forEach(p => obs.observe(p));
+    }
+
+    /* ── Scroll handler ──────────────────────────────────── */
+    function onScroll() {
+      const rect     = wrap.getBoundingClientRect();
+      const scrolled = -rect.top;
+      const total    = wrap.offsetHeight - window.innerHeight;
+      const progress = Math.max(0, Math.min(1, scrolled / total));
+      targetTime = progress * videoDuration;
+      prog.style.height   = (progress * 100) + '%';
+      const inSection = scrolled >= 0 && progress < 1;
+      const vis = inSection ? '1' : '0';
+      prog.style.opacity   = vis;
+      counter.style.opacity = vis;
+    }
+    window.addEventListener('scroll', onScroll, { passive: true });
+
+    /* ── Cover-fit draw (works for VideoFrame and HTMLVideoElement) ── */
+    function drawCover(source) {
+      const cW = canvas.width, cH = canvas.height;
+      const vW = source.codedWidth  || source.displayWidth  || source.videoWidth  || cW;
+      const vH = source.codedHeight || source.displayHeight || source.videoHeight || cH;
+      if (!vW || !vH) return;
+      const vR = vW / vH, cR = cW / cH;
+      let sx = 0, sy = 0, sw = vW, sh = vH;
+      if (vR > cR) { sw = sh * cR; sx = (vW - sw) / 2; }
+      else         { sh = sw / cR; sy = (vH - sh) / 2; }
+      ctx.drawImage(source, sx, sy, sw, sh, 0, 0, cW, cH);
+    }
+
+    /* ════════════════════════════════════════════════════════
+       WebCodecs path
+       ════════════════════════════════════════════════════════ */
+    async function runWebCodecs() {
+      const samples      = [];   /* {pts, dur, isKey, data: Uint8Array}[] */
+      const keyframeIdxs = [];   /* indices into samples[] that are I-frames */
+      let decoderConfig  = null;
+      let currentFrame   = null; /* VideoFrame currently shown */
+      let activeDecoder  = null;
+      let seekGen        = 0;    /* incremented on decoder reset — stale frames discard themselves */
+      let currentKfIdx   = -1;
+      let decodeCursor   = 0;    /* next samples[] index to feed to the decoder */
+      let lastFedPts     = -1;   /* PTS of the last sample fed */
+      let firstFrameSeen = false;
+
+      /* Binary search: largest keyframeIdxs[i] where samples[…].pts ≤ pts */
+      function findKfIdx(pts) {
+        let lo = 0, hi = keyframeIdxs.length - 1, result = 0;
+        while (lo <= hi) {
+          const mid = (lo + hi) >> 1;
+          if (samples[keyframeIdxs[mid]].pts <= pts + 0.001) { result = mid; lo = mid + 1; }
+          else hi = mid - 1;
+        }
+        return result;
+      }
+
+      /* Core seek — called from rAF tick, throttled to one-frame granularity */
+      function seekTo(pts) {
+        if (!decoderConfig || keyframeIdxs.length === 0) return;
+
+        const kfIdx    = findKfIdx(pts);
+        /* Reset when: different keyframe group OR seeking backward past what we've fed */
+        const needReset = kfIdx !== currentKfIdx || pts < lastFedPts - 0.001;
+
+        if (needReset) {
+          const gen = ++seekGen;
+          if (activeDecoder && activeDecoder.state !== 'closed') activeDecoder.close();
+
+          activeDecoder = new VideoDecoder({
+            output(frame) {
+              if (seekGen !== gen) { frame.close(); return; } /* stale, discard */
+              const fPts = frame.timestamp / 1e6;
+              /* Keep frame if it's at or past the current target */
+              if (fPts >= targetTime - 1 / 30) {
+                if (currentFrame) currentFrame.close();
+                currentFrame = frame;
+                if (!firstFrameSeen) {
+                  firstFrameSeen = true;
+                  canvas.classList.add('ready');
+                  loadWrap.classList.add('done');
+                }
+              } else {
+                frame.close(); /* intermediate frame — discard, free GPU memory */
+              }
+            },
+            error(e) { console.warn('VideoDecoder:', e.message); }
+          });
+
+          activeDecoder.configure(decoderConfig);
+          currentKfIdx = kfIdx;
+          decodeCursor = keyframeIdxs[kfIdx];
+          lastFedPts   = -1;
+        }
+
+        /* Feed samples from cursor up to target + one-frame lookahead */
+        while (decodeCursor < samples.length && samples[decodeCursor].pts <= pts + 1 / 30) {
+          const s = samples[decodeCursor++];
+          lastFedPts = s.pts;
+          activeDecoder.decode(new EncodedVideoChunk({
+            type:      s.isKey ? 'key' : 'delta',
+            timestamp: Math.round(s.pts * 1e6),
+            duration:  Math.round(s.dur * 1e6),
+            data:      s.data,
+          }));
+        }
+      }
+
+      /* 60fps paint + throttled seek loop */
+      let prevSeekTarget = -99;
+      (function tick() {
+        /* Only trigger a new seek if target moved by ≥ one frame (1/30s) */
+        if (Math.abs(targetTime - prevSeekTarget) >= 1 / 30 && samples.length > 0) {
+          seekTo(targetTime);
+          prevSeekTarget = targetTime;
+        }
+        if (currentFrame) drawCover(currentFrame);
+        requestAnimationFrame(tick);
+      })();
+
+      /* ── mp4box demux ─────────────────────────────────── */
+      const mp4 = MP4Box.createFile();
+
+      mp4.onError = () => { throw new Error('mp4box parse error'); };
+
+      mp4.onReady = function(info) {
+        const track = info.tracks.find(t => t.type === 'video');
+        if (!track) throw new Error('no video track');
+
+        /* Extract avcC / hvcC decoder description box */
+        let desc;
+        try {
+          const trak = mp4.getTrackById(track.id);
+          for (const entry of trak.mdia.minf.stbl.stsd.entries) {
+            const box = entry.avcC || entry.hvcC;
+            if (box) {
+              const stream = new DataStream(undefined, 0, DataStream.BIG_ENDIAN);
+              box.write(stream);
+              desc = new Uint8Array(stream.buffer, 8); /* skip 4-byte size + 4-byte type */
+              break;
+            }
+          }
+        } catch (_) { /* some codecs don't need a description */ }
+
+        decoderConfig = {
+          codec:                 track.codec,
+          codedWidth:            track.video.width,
+          codedHeight:           track.video.height,
+          hardwareAcceleration:  'prefer-hardware',
+          optimizeForLatency:    true,
+          ...(desc && { description: desc }),
+        };
+
+        build(info.duration / info.timescale);
+        onScroll();
+
+        mp4.setExtractionOptions(track.id, null, { nbSamples: 65535 });
+        mp4.start();
+      };
+
+      mp4.onSamples = function(_id, _user, samps) {
+        for (const s of samps) {
+          /* s.cts = absolute composition timestamp in timescale units */
+          const pts = s.cts / s.timescale;
+          const dur = s.duration / s.timescale;
+          samples.push({ pts, dur, isKey: s.is_sync, data: s.data });
+          if (s.is_sync) keyframeIdxs.push(samples.length - 1);
+        }
+      };
+
+      /* ── Streaming fetch → mp4box ─────────────────────── */
+      const res    = await fetch('./hero.mp4');
+      const total  = +res.headers.get('content-length') || 0;
+      const reader = res.body.getReader();
+      let offset   = 0;
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        /* Slice to create a detached ArrayBuffer mp4box can tag with fileStart */
+        const buf = value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
+        buf.fileStart = offset;
+        mp4.appendBuffer(buf);
+        offset += value.byteLength;
+        if (total) loadBar.style.width = Math.min(99, (offset / total) * 100).toFixed(1) + '%';
+      }
+
+      mp4.flush();
+      loadBar.style.width = '100%';
+    }
+
+    /* ════════════════════════════════════════════════════════
+       Fallback: canvas + native <video> seek (lerp + snap)
+       Used when WebCodecs or MP4Box is unavailable / fails.
+       ════════════════════════════════════════════════════════ */
+    function runNativeVideo() {
+      document.getElementById('method-badge').textContent = 'Native Video (fallback)';
+
+      /* Paint loop — canvas shows last decoded frame */
+      (function paintLoop() {
+        if (video.readyState >= 2) drawCover(video);
+        requestAnimationFrame(paintLoop);
+      })();
+
+      /* Lerp + snap seek loop */
+      let prevNow = performance.now();
+      (function tick() {
+        const now = performance.now();
+        const dt  = Math.min((now - prevNow) / 1000, 0.05);
+        prevNow = now;
+        if (video.readyState >= 2) {
+          const diff = targetTime - video.currentTime;
+          if (Math.abs(diff) > 0.5) {
+            video.currentTime = targetTime;
+          } else {
+            const factor = diff >= 0 ? 8 : 5;
+            const step   = diff * Math.min(1, dt * factor);
+            if (Math.abs(step) > 0.008) video.currentTime += step;
+          }
+        }
+        requestAnimationFrame(tick);
+      })();
+
+      function init() {
+        build(video.duration);
+        onScroll();
+        video.currentTime = targetTime;
+        canvas.classList.add('ready');
+        loadWrap.classList.add('done');
+      }
+
+      if (video.readyState >= 1) init();
+      else video.addEventListener('loadedmetadata', init, { once: true });
+    }
+
+    /* ── Entry point ─────────────────────────────────────── */
+    let fellBack = false;
+    function fallback() {
+      if (fellBack) return;
+      fellBack = true;
+      console.info('WebCodecs unavailable — falling back to native video');
+      runNativeVideo();
+    }
+
+    if (typeof VideoDecoder !== 'undefined' && typeof MP4Box !== 'undefined') {
+      runWebCodecs().catch(e => {
+        console.warn('WebCodecs path error:', e);
+        fallback();
+      });
+    } else {
+      fallback();
+    }
+  </script>
+</body>
+</html>
