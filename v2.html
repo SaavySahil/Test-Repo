@@ -400,6 +400,48 @@
       let lastFedPts     = -1;   /* PTS of the last sample fed */
       let firstFrameSeen = false;
 
+      /* Safety net: if no frame arrives within 4s, fall back to native video */
+      const safetyTimer = setTimeout(() => {
+        if (!firstFrameSeen) { console.warn('WebCodecs: no frame in 4s, falling back'); fallback(); }
+      }, 4000);
+
+      /* ── Build AVCDecoderConfigurationRecord from mp4box parsed fields ──
+         DataStream is NOT reliably exposed as a global in the mp4box CDN
+         bundle, so we construct the raw bytes manually from the parsed avcC
+         object instead of calling box.write(stream).                      */
+      function buildAvcDesc(trak) {
+        for (const entry of trak.mdia.minf.stbl.stsd.entries) {
+          if (entry.avcC) {
+            const a   = entry.avcC;
+            const sps = a.SPS || [];
+            const pps = a.PPS || [];
+            let size  = 6;
+            for (const s of sps) size += 2 + s.nalu.length;
+            size += 1;
+            for (const p of pps) size += 2 + p.nalu.length;
+            const buf = new Uint8Array(size);
+            let o = 0;
+            buf[o++] = a.configurationVersion || 1;
+            buf[o++] = a.AVCProfileIndication;
+            buf[o++] = a.profile_compatibility;
+            buf[o++] = a.AVCLevelIndication;
+            buf[o++] = (a.lengthSizeMinusOne & 3) | 0xFC;
+            buf[o++] = (sps.length & 0x1F) | 0xE0;
+            for (const s of sps) { buf[o++] = s.nalu.length >> 8; buf[o++] = s.nalu.length & 0xFF; buf.set(s.nalu, o); o += s.nalu.length; }
+            buf[o++] = pps.length;
+            for (const p of pps) { buf[o++] = p.nalu.length >> 8; buf[o++] = p.nalu.length & 0xFF; buf.set(p.nalu, o); o += p.nalu.length; }
+            return buf;
+          }
+          /* HEVC — try DataStream if available, otherwise skip */
+          if (entry.hvcC && window.DataStream) {
+            const stream = new DataStream(undefined, 0, DataStream.BIG_ENDIAN);
+            entry.hvcC.write(stream);
+            return new Uint8Array(stream.buffer, 8);
+          }
+        }
+        return undefined;
+      }
+
       /* Binary search: largest keyframeIdxs[i] where samples[…].pts ≤ pts */
       function findKfIdx(pts) {
         let lo = 0, hi = keyframeIdxs.length - 1, result = 0;
@@ -415,8 +457,7 @@
       function seekTo(pts) {
         if (!decoderConfig || keyframeIdxs.length === 0) return;
 
-        const kfIdx    = findKfIdx(pts);
-        /* Reset when: different keyframe group OR seeking backward past what we've fed */
+        const kfIdx     = findKfIdx(pts);
         const needReset = kfIdx !== currentKfIdx || pts < lastFedPts - 0.001;
 
         if (needReset) {
@@ -425,22 +466,25 @@
 
           activeDecoder = new VideoDecoder({
             output(frame) {
-              if (seekGen !== gen) { frame.close(); return; } /* stale, discard */
+              if (seekGen !== gen) { frame.close(); return; }
               const fPts = frame.timestamp / 1e6;
-              /* Keep frame if it's at or past the current target */
               if (fPts >= targetTime - 1 / 30) {
                 if (currentFrame) currentFrame.close();
                 currentFrame = frame;
                 if (!firstFrameSeen) {
                   firstFrameSeen = true;
+                  clearTimeout(safetyTimer);
                   canvas.classList.add('ready');
                   loadWrap.classList.add('done');
                 }
               } else {
-                frame.close(); /* intermediate frame — discard, free GPU memory */
+                frame.close();
               }
             },
-            error(e) { console.warn('VideoDecoder:', e.message); }
+            error(e) {
+              console.warn('VideoDecoder error:', e.message);
+              fallback(); /* configure failed — drop to native video */
+            }
           });
 
           activeDecoder.configure(decoderConfig);
@@ -449,7 +493,6 @@
           lastFedPts   = -1;
         }
 
-        /* Feed samples from cursor up to target + one-frame lookahead */
         while (decodeCursor < samples.length && samples[decodeCursor].pts <= pts + 1 / 30) {
           const s = samples[decodeCursor++];
           lastFedPts = s.pts;
@@ -465,7 +508,6 @@
       /* 60fps paint + throttled seek loop */
       let prevSeekTarget = -99;
       (function tick() {
-        /* Only trigger a new seek if target moved by ≥ one frame (1/30s) */
         if (Math.abs(targetTime - prevSeekTarget) >= 1 / 30 && samples.length > 0) {
           seekTo(targetTime);
           prevSeekTarget = targetTime;
@@ -477,49 +519,44 @@
       /* ── mp4box demux ─────────────────────────────────── */
       const mp4 = MP4Box.createFile();
 
-      mp4.onError = () => { throw new Error('mp4box parse error'); };
+      mp4.onError = (e) => { console.warn('mp4box error:', e); fallback(); };
 
-      mp4.onReady = function(info) {
+      /* onReady is async so we can await isConfigSupported before start() */
+      mp4.onReady = async function(info) {
         const track = info.tracks.find(t => t.type === 'video');
-        if (!track) throw new Error('no video track');
+        if (!track) { fallback(); return; }
 
-        /* Extract avcC / hvcC decoder description box */
         let desc;
-        try {
-          const trak = mp4.getTrackById(track.id);
-          for (const entry of trak.mdia.minf.stbl.stsd.entries) {
-            const box = entry.avcC || entry.hvcC;
-            if (box) {
-              const stream = new DataStream(undefined, 0, DataStream.BIG_ENDIAN);
-              box.write(stream);
-              desc = new Uint8Array(stream.buffer, 8); /* skip 4-byte size + 4-byte type */
-              break;
-            }
-          }
-        } catch (_) { /* some codecs don't need a description */ }
+        try { desc = buildAvcDesc(mp4.getTrackById(track.id)); }
+        catch(e) { console.warn('avcC extraction:', e); }
 
         decoderConfig = {
-          codec:                 track.codec,
-          codedWidth:            track.video.width,
-          codedHeight:           track.video.height,
-          hardwareAcceleration:  'prefer-hardware',
-          optimizeForLatency:    true,
+          codec:                track.codec,
+          codedWidth:           track.video.width,
+          codedHeight:          track.video.height,
+          hardwareAcceleration: 'prefer-hardware',
+          optimizeForLatency:   true,
           ...(desc && { description: desc }),
         };
 
+        /* Validate the config before committing to this path */
+        try {
+          const support = await VideoDecoder.isConfigSupported(decoderConfig);
+          if (!support.supported) { fallback(); return; }
+        } catch(_) { /* isConfigSupported unavailable — proceed optimistically */ }
+
         build(info.duration / info.timescale);
         onScroll();
-
         mp4.setExtractionOptions(track.id, null, { nbSamples: 65535 });
         mp4.start();
       };
 
       mp4.onSamples = function(_id, _user, samps) {
         for (const s of samps) {
-          /* s.cts = absolute composition timestamp in timescale units */
-          const pts = s.cts / s.timescale;
+          const pts = s.cts / s.timescale; /* absolute composition timestamp */
           const dur = s.duration / s.timescale;
-          samples.push({ pts, dur, isKey: s.is_sync, data: s.data });
+          /* Copy data — don't keep a view into mp4box's internal buffer */
+          samples.push({ pts, dur, isKey: s.is_sync, data: new Uint8Array(s.data) });
           if (s.is_sync) keyframeIdxs.push(samples.length - 1);
         }
       };
@@ -533,7 +570,6 @@
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
-        /* Slice to create a detached ArrayBuffer mp4box can tag with fileStart */
         const buf = value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
         buf.fileStart = offset;
         mp4.appendBuffer(buf);
