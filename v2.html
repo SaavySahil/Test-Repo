@@ -399,10 +399,19 @@
       let detectedFPS    = 30;
 
       /* ── Tuning constants ──────────────────────────────── */
-      const LOOKAHEAD  = 60;   /* feed 2 s ahead of display cursor  */
-      const CACHE_KEEP = 120;  /* keep ±4 s of frames around cursor */
-      const MAX_QUEUE  = 25;   /* don't over-fill decoder queue     */
-      const frameCache = new Map(); /* frameIdx → VideoFrame         */
+      const LOOKAHEAD  = 60;   /* feed 2 s ahead of display cursor           */
+      const CACHE_KEEP = 45;   /* keep ±1.5 s of frames (ImageBitmaps)       */
+      const MAX_QUEUE  = 20;   /* don't over-fill decoder queue              */
+
+      /* Off-screen canvas: VideoFrames are immediately downscaled and
+         snapshotted here (synchronously) then closed. Storing 8 MB
+         VideoFrames directly would exhaust GPU VRAM within seconds.
+         At 1280×720 each ImageBitmap ≈ 3.7 MB; 90 cached = ~330 MB. */
+      const OSC_W = 1280, OSC_H = 720;
+      const osc    = new OffscreenCanvas(OSC_W, OSC_H);
+      const oscCtx = osc.getContext('2d', { alpha: false });
+
+      const frameCache = new Map(); /* frameIdx → ImageBitmap                */
 
       /* Permanent keyframe previews — shown instantly while the
          per-frame decoder catches up after a large seek            */
@@ -475,9 +484,21 @@
           output(frame) {
             if (seekGen !== gen) { frame.close(); return; }
             const fIdx = Math.round(frame.timestamp / 1e6 * detectedFPS);
-            const old  = frameCache.get(fIdx);
+            /* Cover-fit into the offscreen canvas, then snapshot as an
+               ImageBitmap (GPU-compressed). Immediately close the raw
+               VideoFrame so we don't accumulate ~8 MB blobs in VRAM. */
+            const vW = frame.codedWidth || frame.displayWidth || OSC_W;
+            const vH = frame.codedHeight || frame.displayHeight || OSC_H;
+            const vR = vW / vH, cR = OSC_W / OSC_H;
+            let sx = 0, sy = 0, sw = vW, sh = vH;
+            if (vR > cR) { sw = sh * cR; sx = (vW - sw) / 2; }
+            else         { sh = sw / cR; sy = (vH - sh) / 2; }
+            oscCtx.drawImage(frame, sx, sy, sw, sh, 0, 0, OSC_W, OSC_H);
+            frame.close();
+            const bm  = osc.transferToImageBitmap();
+            const old = frameCache.get(fIdx);
             if (old) old.close();
-            frameCache.set(fIdx, frame);
+            frameCache.set(fIdx, bm);
             pruneCache(Math.round(rawTarget * detectedFPS));
             if (!firstFrameSeen) {
               firstFrameSeen = true;
