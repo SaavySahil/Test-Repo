@@ -311,7 +311,7 @@
     ];
 
     /* ── Shared state ─────────────────────────────────────── */
-    let targetTime    = 0;
+    let rawTarget     = 0;   /* set directly by scroll events */
     let videoDuration = 43;
 
     /* ── Build scroll phases ──────────────────────────────── */
@@ -363,11 +363,11 @@
       const scrolled = -rect.top;
       const total    = wrap.offsetHeight - window.innerHeight;
       const progress = Math.max(0, Math.min(1, scrolled / total));
-      targetTime = progress * videoDuration;
-      prog.style.height   = (progress * 100) + '%';
+      rawTarget = progress * videoDuration;
+      prog.style.height    = (progress * 100) + '%';
       const inSection = scrolled >= 0 && progress < 1;
       const vis = inSection ? '1' : '0';
-      prog.style.opacity   = vis;
+      prog.style.opacity    = vis;
       counter.style.opacity = vis;
     }
     window.addEventListener('scroll', onScroll, { passive: true });
@@ -386,29 +386,37 @@
     }
 
     /* ════════════════════════════════════════════════════════
-       WebCodecs path
+       WebCodecs path — frame-cache + lookahead + lerp
        ════════════════════════════════════════════════════════ */
     async function runWebCodecs() {
       const samples      = [];   /* {pts, dur, isKey, data: Uint8Array}[] */
-      const keyframeIdxs = [];   /* indices into samples[] that are I-frames */
+      const keyframeIdxs = [];   /* indices into samples[] that are keyframes */
       let decoderConfig  = null;
-      let currentFrame   = null; /* VideoFrame currently shown */
+
+      /* ── Frame cache ───────────────────────────────────── */
+      const FPS        = 30;     /* assumed output frame rate for index math */
+      const LOOKAHEAD  = 6;      /* frames to pre-feed ahead of smoothTime   */
+      const CACHE_KEEP = 18;     /* frames to keep on each side of cursor    */
+      const frameCache = new Map(); /* frameIdx → VideoFrame                 */
+
       let activeDecoder  = null;
-      let seekGen        = 0;    /* incremented on decoder reset — stale frames discard themselves */
+      let seekGen        = 0;    /* stale frames from old decoders discard via closure */
       let currentKfIdx   = -1;
-      let decodeCursor   = 0;    /* next samples[] index to feed to the decoder */
-      let lastFedPts     = -1;   /* PTS of the last sample fed */
+      let feedCursor     = 0;    /* next samples[] index to feed */
       let firstFrameSeen = false;
 
-      /* Safety net: if no frame arrives within 4s, fall back to native video */
-      const safetyTimer = setTimeout(() => {
-        if (!firstFrameSeen) { console.warn('WebCodecs: no frame in 4s, falling back'); fallback(); }
-      }, 4000);
+      /* ── Smooth-scroll state ───────────────────────────── */
+      let smoothTime = 0;        /* lerped toward rawTarget each rAF tick    */
+      let prevNow    = performance.now();
 
-      /* ── Build AVCDecoderConfigurationRecord from mp4box parsed fields ──
-         DataStream is NOT reliably exposed as a global in the mp4box CDN
-         bundle, so we construct the raw bytes manually from the parsed avcC
-         object instead of calling box.write(stream).                      */
+      /* Safety net: if no frame arrives within 5s, fall back to native video */
+      const safetyTimer = setTimeout(() => {
+        if (!firstFrameSeen) { console.warn('WebCodecs: no frame in 5s, falling back'); fallback(); }
+      }, 5000);
+
+      /* ── Build AVCDecoderConfigurationRecord manually ─────
+         DataStream is NOT exposed as window.DataStream in the
+         mp4box CDN bundle; construct avcC bytes from parsed fields. */
       function buildAvcDesc(trak) {
         for (const entry of trak.mdia.minf.stbl.stsd.entries) {
           if (entry.avcC) {
@@ -432,7 +440,6 @@
             for (const p of pps) { buf[o++] = p.nalu.length >> 8; buf[o++] = p.nalu.length & 0xFF; buf.set(p.nalu, o); o += p.nalu.length; }
             return buf;
           }
-          /* HEVC — try DataStream if available, otherwise skip */
           if (entry.hvcC && window.DataStream) {
             const stream = new DataStream(undefined, 0, DataStream.BIG_ENDIAN);
             entry.hvcC.write(stream);
@@ -453,66 +460,93 @@
         return result;
       }
 
-      /* Core seek — called from rAF tick, throttled to one-frame granularity */
-      function seekTo(pts) {
-        if (!decoderConfig || keyframeIdxs.length === 0) return;
-
-        const kfIdx     = findKfIdx(pts);
-        const needReset = kfIdx !== currentKfIdx || pts < lastFedPts - 0.001;
-
-        if (needReset) {
-          const gen = ++seekGen;
-          if (activeDecoder && activeDecoder.state !== 'closed') activeDecoder.close();
-
-          activeDecoder = new VideoDecoder({
-            output(frame) {
-              if (seekGen !== gen) { frame.close(); return; }
-              const fPts = frame.timestamp / 1e6;
-              if (fPts >= targetTime - 1 / 30) {
-                if (currentFrame) currentFrame.close();
-                currentFrame = frame;
-                if (!firstFrameSeen) {
-                  firstFrameSeen = true;
-                  clearTimeout(safetyTimer);
-                  canvas.classList.add('ready');
-                  loadWrap.classList.add('done');
-                }
-              } else {
-                frame.close();
-              }
-            },
-            error(e) {
-              console.warn('VideoDecoder error:', e.message);
-              fallback(); /* configure failed — drop to native video */
-            }
-          });
-
-          activeDecoder.configure(decoderConfig);
-          currentKfIdx = kfIdx;
-          decodeCursor = keyframeIdxs[kfIdx];
-          lastFedPts   = -1;
-        }
-
-        while (decodeCursor < samples.length && samples[decodeCursor].pts <= pts + 1 / 30) {
-          const s = samples[decodeCursor++];
-          lastFedPts = s.pts;
-          activeDecoder.decode(new EncodedVideoChunk({
-            type:      s.isKey ? 'key' : 'delta',
-            timestamp: Math.round(s.pts * 1e6),
-            duration:  Math.round(s.dur * 1e6),
-            data:      s.data,
-          }));
+      /* Prune cached frames beyond CACHE_KEEP distance from centerIdx */
+      function pruneCache(centerIdx) {
+        for (const [idx, frame] of frameCache) {
+          if (Math.abs(idx - centerIdx) > CACHE_KEEP) { frame.close(); frameCache.delete(idx); }
         }
       }
 
-      /* 60fps paint + throttled seek loop */
-      let prevSeekTarget = -99;
-      (function tick() {
-        if (Math.abs(targetTime - prevSeekTarget) >= 1 / 30 && samples.length > 0) {
-          seekTo(targetTime);
-          prevSeekTarget = targetTime;
+      /* Spin up a new VideoDecoder (increments seekGen to invalidate old output) */
+      function resetDecoder() {
+        const gen = ++seekGen;
+        if (activeDecoder && activeDecoder.state !== 'closed') activeDecoder.close();
+        activeDecoder = new VideoDecoder({
+          output(frame) {
+            if (seekGen !== gen) { frame.close(); return; }
+            const fIdx = Math.round(frame.timestamp / 1e6 * FPS);
+            const old  = frameCache.get(fIdx);
+            if (old) old.close();
+            frameCache.set(fIdx, frame);
+            pruneCache(Math.round(smoothTime * FPS));
+            if (!firstFrameSeen) {
+              firstFrameSeen = true;
+              clearTimeout(safetyTimer);
+              canvas.classList.add('ready');
+              loadWrap.classList.add('done');
+            }
+          },
+          error(e) { console.warn('VideoDecoder error:', e.message); fallback(); }
+        });
+        activeDecoder.configure(decoderConfig);
+      }
+
+      /* Feed samples into the decoder up to pts + lookahead window */
+      function ensureDecoded(pts) {
+        if (!decoderConfig || keyframeIdxs.length === 0) return;
+
+        const kfIdx    = findKfIdx(pts);
+        const lastFed  = feedCursor > 0 ? samples[feedCursor - 1].pts : -1;
+        const needReset = kfIdx !== currentKfIdx || pts < lastFed - (2 / FPS);
+
+        if (needReset) {
+          resetDecoder();
+          currentKfIdx = kfIdx;
+          feedCursor   = keyframeIdxs[kfIdx];
         }
-        if (currentFrame) drawCover(currentFrame);
+
+        const ceiling = pts + (LOOKAHEAD / FPS);
+        while (feedCursor < samples.length && samples[feedCursor].pts <= ceiling) {
+          const s = samples[feedCursor++];
+          if (activeDecoder && activeDecoder.state !== 'closed') {
+            activeDecoder.decode(new EncodedVideoChunk({
+              type:      s.isKey ? 'key' : 'delta',
+              timestamp: Math.round(s.pts * 1e6),
+              duration:  Math.round(s.dur * 1e6),
+              data:      s.data,
+            }));
+          }
+        }
+      }
+
+      /* Paint the closest cached frame to pts */
+      function displayAt(pts) {
+        const targetIdx = Math.round(pts * FPS);
+        if (frameCache.has(targetIdx)) { drawCover(frameCache.get(targetIdx)); return; }
+        let bestIdx = -1, bestDist = Infinity;
+        for (const idx of frameCache.keys()) {
+          const d = Math.abs(idx - targetIdx);
+          if (d < bestDist) { bestDist = d; bestIdx = idx; }
+        }
+        if (bestIdx >= 0) drawCover(frameCache.get(bestIdx));
+      }
+
+      /* ── rAF tick: lerp → decode → display ────────────── */
+      (function tick() {
+        const now = performance.now();
+        const dt  = Math.min((now - prevNow) / 1000, 0.05);
+        prevNow = now;
+
+        /* Lenis-style lerp: smoothTime chases rawTarget */
+        const diff = rawTarget - smoothTime;
+        smoothTime = Math.abs(diff) < 0.0005
+          ? rawTarget
+          : smoothTime + diff * Math.min(1, dt * 12);
+
+        if (samples.length > 0) {
+          ensureDecoded(smoothTime);
+          displayAt(smoothTime);
+        }
         requestAnimationFrame(tick);
       })();
 
@@ -521,7 +555,6 @@
 
       mp4.onError = (e) => { console.warn('mp4box error:', e); fallback(); };
 
-      /* onReady is async so we can await isConfigSupported before start() */
       mp4.onReady = async function(info) {
         const track = info.tracks.find(t => t.type === 'video');
         if (!track) { fallback(); return; }
@@ -539,11 +572,10 @@
           ...(desc && { description: desc }),
         };
 
-        /* Validate the config before committing to this path */
         try {
           const support = await VideoDecoder.isConfigSupported(decoderConfig);
           if (!support.supported) { fallback(); return; }
-        } catch(_) { /* isConfigSupported unavailable — proceed optimistically */ }
+        } catch(_) { /* proceed optimistically if isConfigSupported unavailable */ }
 
         build(info.duration / info.timescale);
         onScroll();
@@ -553,9 +585,8 @@
 
       mp4.onSamples = function(_id, _user, samps) {
         for (const s of samps) {
-          const pts = s.cts / s.timescale; /* absolute composition timestamp */
+          const pts = s.cts / s.timescale;
           const dur = s.duration / s.timescale;
-          /* Copy data — don't keep a view into mp4box's internal buffer */
           samples.push({ pts, dur, isKey: s.is_sync, data: new Uint8Array(s.data) });
           if (s.is_sync) keyframeIdxs.push(samples.length - 1);
         }
@@ -588,22 +619,20 @@
     function runNativeVideo() {
       document.getElementById('method-badge').textContent = 'Native Video (fallback)';
 
-      /* Paint loop — canvas shows last decoded frame */
       (function paintLoop() {
         if (video.readyState >= 2) drawCover(video);
         requestAnimationFrame(paintLoop);
       })();
 
-      /* Lerp + snap seek loop */
       let prevNow = performance.now();
       (function tick() {
         const now = performance.now();
         const dt  = Math.min((now - prevNow) / 1000, 0.05);
         prevNow = now;
         if (video.readyState >= 2) {
-          const diff = targetTime - video.currentTime;
+          const diff = rawTarget - video.currentTime;
           if (Math.abs(diff) > 0.5) {
-            video.currentTime = targetTime;
+            video.currentTime = rawTarget;
           } else {
             const factor = diff >= 0 ? 8 : 5;
             const step   = diff * Math.min(1, dt * factor);
@@ -616,7 +645,7 @@
       function init() {
         build(video.duration);
         onScroll();
-        video.currentTime = targetTime;
+        video.currentTime = rawTarget;
         canvas.classList.add('ready');
         loadWrap.classList.add('done');
       }
