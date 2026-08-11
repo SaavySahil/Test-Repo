@@ -372,11 +372,13 @@
     }
     window.addEventListener('scroll', onScroll, { passive: true });
 
-    /* ── Cover-fit draw (works for VideoFrame and HTMLVideoElement) ── */
+    /* ── Cover-fit draw (VideoFrame, ImageBitmap, HTMLVideoElement) ── */
     function drawCover(source) {
       const cW = canvas.width, cH = canvas.height;
-      const vW = source.codedWidth  || source.displayWidth  || source.videoWidth  || cW;
-      const vH = source.codedHeight || source.displayHeight || source.videoHeight || cH;
+      const vW = source.codedWidth  || source.displayWidth  ||
+                 source.videoWidth  || source.width         || cW;
+      const vH = source.codedHeight || source.displayHeight ||
+                 source.videoHeight || source.height        || cH;
       if (!vW || !vH) return;
       const vR = vW / vH, cR = cW / cH;
       let sx = 0, sy = 0, sw = vW, sh = vH;
@@ -386,37 +388,37 @@
     }
 
     /* ════════════════════════════════════════════════════════
-       WebCodecs path — frame-cache + lookahead + lerp
+       WebCodecs path — keyframe pre-bake + frame cache + lookahead
+       No lerp: rawTarget drives display directly (OS scroll is
+       already interpolated; our lerp only added input lag).
        ════════════════════════════════════════════════════════ */
     async function runWebCodecs() {
-      const samples      = [];   /* {pts, dur, isKey, data: Uint8Array}[] */
-      const keyframeIdxs = [];   /* indices into samples[] that are keyframes */
+      const samples      = [];
+      const keyframeIdxs = [];
       let decoderConfig  = null;
+      let detectedFPS    = 30;
 
-      /* ── Frame cache ───────────────────────────────────── */
-      const FPS        = 30;     /* assumed output frame rate for index math */
-      const LOOKAHEAD  = 6;      /* frames to pre-feed ahead of smoothTime   */
-      const CACHE_KEEP = 18;     /* frames to keep on each side of cursor    */
-      const frameCache = new Map(); /* frameIdx → VideoFrame                 */
+      /* ── Tuning constants ──────────────────────────────── */
+      const LOOKAHEAD  = 60;   /* feed 2 s ahead of display cursor  */
+      const CACHE_KEEP = 120;  /* keep ±4 s of frames around cursor */
+      const MAX_QUEUE  = 25;   /* don't over-fill decoder queue     */
+      const frameCache = new Map(); /* frameIdx → VideoFrame         */
 
-      let activeDecoder  = null;
-      let seekGen        = 0;    /* stale frames from old decoders discard via closure */
-      let currentKfIdx   = -1;
-      let feedCursor     = 0;    /* next samples[] index to feed */
+      /* Permanent keyframe previews — shown instantly while the
+         per-frame decoder catches up after a large seek            */
+      const kfBitmaps  = [];   /* ImageBitmap[] parallel to keyframeIdxs */
+
+      let mainDecoder  = null;
+      let seekGen      = 0;
+      let currentKfIdx = -1;
+      let feedCursor   = 0;
       let firstFrameSeen = false;
 
-      /* ── Smooth-scroll state ───────────────────────────── */
-      let smoothTime = 0;        /* lerped toward rawTarget each rAF tick    */
-      let prevNow    = performance.now();
-
-      /* Safety net: if no frame arrives within 5s, fall back to native video */
       const safetyTimer = setTimeout(() => {
-        if (!firstFrameSeen) { console.warn('WebCodecs: no frame in 5s, falling back'); fallback(); }
-      }, 5000);
+        if (!firstFrameSeen) { console.warn('WebCodecs: timeout, falling back'); fallback(); }
+      }, 6000);
 
-      /* ── Build AVCDecoderConfigurationRecord manually ─────
-         DataStream is NOT exposed as window.DataStream in the
-         mp4box CDN bundle; construct avcC bytes from parsed fields. */
+      /* ── Build avcC descriptor (no DataStream dependency) ── */
       function buildAvcDesc(trak) {
         for (const entry of trak.mdia.minf.stbl.stsd.entries) {
           if (entry.avcC) {
@@ -460,25 +462,23 @@
         return result;
       }
 
-      /* Prune cached frames beyond CACHE_KEEP distance from centerIdx */
       function pruneCache(centerIdx) {
         for (const [idx, frame] of frameCache) {
           if (Math.abs(idx - centerIdx) > CACHE_KEEP) { frame.close(); frameCache.delete(idx); }
         }
       }
 
-      /* Spin up a new VideoDecoder (increments seekGen to invalidate old output) */
-      function resetDecoder() {
+      function resetMainDecoder() {
         const gen = ++seekGen;
-        if (activeDecoder && activeDecoder.state !== 'closed') activeDecoder.close();
-        activeDecoder = new VideoDecoder({
+        if (mainDecoder && mainDecoder.state !== 'closed') mainDecoder.close();
+        mainDecoder = new VideoDecoder({
           output(frame) {
             if (seekGen !== gen) { frame.close(); return; }
-            const fIdx = Math.round(frame.timestamp / 1e6 * FPS);
+            const fIdx = Math.round(frame.timestamp / 1e6 * detectedFPS);
             const old  = frameCache.get(fIdx);
             if (old) old.close();
             frameCache.set(fIdx, frame);
-            pruneCache(Math.round(smoothTime * FPS));
+            pruneCache(Math.round(rawTarget * detectedFPS));
             if (!firstFrameSeen) {
               firstFrameSeen = true;
               clearTimeout(safetyTimer);
@@ -486,30 +486,30 @@
               loadWrap.classList.add('done');
             }
           },
-          error(e) { console.warn('VideoDecoder error:', e.message); fallback(); }
+          error(e) { console.warn('VideoDecoder:', e.message); fallback(); }
         });
-        activeDecoder.configure(decoderConfig);
+        mainDecoder.configure(decoderConfig);
       }
 
-      /* Feed samples into the decoder up to pts + lookahead window */
+      /* Feed samples ahead of pts; respects decoder queue depth */
       function ensureDecoded(pts) {
         if (!decoderConfig || keyframeIdxs.length === 0) return;
-
-        const kfIdx    = findKfIdx(pts);
-        const lastFed  = feedCursor > 0 ? samples[feedCursor - 1].pts : -1;
-        const needReset = kfIdx !== currentKfIdx || pts < lastFed - (2 / FPS);
-
-        if (needReset) {
-          resetDecoder();
+        const kfIdx   = findKfIdx(pts);
+        const lastFed = feedCursor > 0 ? samples[feedCursor - 1].pts : -1;
+        if (kfIdx !== currentKfIdx || pts < lastFed - (2 / detectedFPS)) {
+          resetMainDecoder();
           currentKfIdx = kfIdx;
           feedCursor   = keyframeIdxs[kfIdx];
         }
-
-        const ceiling = pts + (LOOKAHEAD / FPS);
-        while (feedCursor < samples.length && samples[feedCursor].pts <= ceiling) {
+        const ceiling = pts + (LOOKAHEAD / detectedFPS);
+        while (
+          feedCursor < samples.length &&
+          samples[feedCursor].pts <= ceiling &&
+          (mainDecoder.decodeQueueSize ?? 0) < MAX_QUEUE
+        ) {
           const s = samples[feedCursor++];
-          if (activeDecoder && activeDecoder.state !== 'closed') {
-            activeDecoder.decode(new EncodedVideoChunk({
+          if (mainDecoder.state !== 'closed') {
+            mainDecoder.decode(new EncodedVideoChunk({
               type:      s.isKey ? 'key' : 'delta',
               timestamp: Math.round(s.pts * 1e6),
               duration:  Math.round(s.dur * 1e6),
@@ -519,33 +519,32 @@
         }
       }
 
-      /* Paint the closest cached frame to pts */
+      /* Display: exact cache hit → closest cached frame (≤1 s) → keyframe bitmap */
       function displayAt(pts) {
-        const targetIdx = Math.round(pts * FPS);
+        const targetIdx = Math.round(pts * detectedFPS);
+
         if (frameCache.has(targetIdx)) { drawCover(frameCache.get(targetIdx)); return; }
+
         let bestIdx = -1, bestDist = Infinity;
         for (const idx of frameCache.keys()) {
           const d = Math.abs(idx - targetIdx);
           if (d < bestDist) { bestDist = d; bestIdx = idx; }
         }
-        if (bestIdx >= 0) drawCover(frameCache.get(bestIdx));
+        if (bestIdx >= 0 && bestDist <= detectedFPS) {
+          drawCover(frameCache.get(bestIdx)); return;
+        }
+
+        /* Keyframe bitmap fallback — always available after pre-bake */
+        const ki = findKfIdx(pts);
+        const bm = kfBitmaps[ki] || kfBitmaps.find(b => b);
+        if (bm) drawCover(bm);
       }
 
-      /* ── rAF tick: lerp → decode → display ────────────── */
+      /* ── rAF tick: no lerp, rawTarget drives display directly ── */
       (function tick() {
-        const now = performance.now();
-        const dt  = Math.min((now - prevNow) / 1000, 0.05);
-        prevNow = now;
-
-        /* Lenis-style lerp: smoothTime chases rawTarget */
-        const diff = rawTarget - smoothTime;
-        smoothTime = Math.abs(diff) < 0.0005
-          ? rawTarget
-          : smoothTime + diff * Math.min(1, dt * 12);
-
         if (samples.length > 0) {
-          ensureDecoded(smoothTime);
-          displayAt(smoothTime);
+          ensureDecoded(rawTarget);
+          displayAt(rawTarget);
         }
         requestAnimationFrame(tick);
       })();
@@ -572,15 +571,17 @@
           ...(desc && { description: desc }),
         };
 
+        /* Start extraction NOW before any await — prevents race on fast connections */
+        mp4.setExtractionOptions(track.id, null, { nbSamples: 65535 });
+        mp4.start();
+
         try {
           const support = await VideoDecoder.isConfigSupported(decoderConfig);
           if (!support.supported) { fallback(); return; }
-        } catch(_) { /* proceed optimistically if isConfigSupported unavailable */ }
+        } catch(_) {}
 
         build(info.duration / info.timescale);
         onScroll();
-        mp4.setExtractionOptions(track.id, null, { nbSamples: 65535 });
-        mp4.start();
       };
 
       mp4.onSamples = function(_id, _user, samps) {
@@ -589,6 +590,11 @@
           const dur = s.duration / s.timescale;
           samples.push({ pts, dur, isKey: s.is_sync, data: new Uint8Array(s.data) });
           if (s.is_sync) keyframeIdxs.push(samples.length - 1);
+        }
+        /* Detect actual frame rate from first two samples */
+        if (samples.length === 2 && samples[0].pts === 0 && samples[1].pts > 0) {
+          const fps = Math.round(1 / samples[1].pts);
+          if (fps >= 1 && fps <= 120) detectedFPS = fps;
         }
       };
 
@@ -610,6 +616,47 @@
 
       mp4.flush();
       loadBar.style.width = '100%';
+
+      /* ── Pre-bake keyframes → ImageBitmaps ───────────────
+         After the full file is demuxed, decode every I-frame
+         independently and store as permanent GPU bitmaps.
+         These give instant visual feedback on any seek while
+         the per-frame decoder catches up asynchronously.     */
+      if (keyframeIdxs.length > 0 && decoderConfig) {
+        const bakingPromises = [];
+        const kfDecoder = new VideoDecoder({
+          output(frame) {
+            const pts = frame.timestamp / 1e6;
+            let ki = 0, minDist = Infinity;
+            for (let i = 0; i < keyframeIdxs.length; i++) {
+              const d = Math.abs(samples[keyframeIdxs[i]].pts - pts);
+              if (d < minDist) { minDist = d; ki = i; }
+            }
+            const p = createImageBitmap(frame).then(bm => {
+              frame.close();
+              if (!kfBitmaps[ki]) kfBitmaps[ki] = bm;
+              else bm.close();
+            }).catch(() => { frame.close(); });
+            bakingPromises.push(p);
+          },
+          error() {}
+        });
+        try {
+          kfDecoder.configure(decoderConfig);
+          for (const kfSi of keyframeIdxs) {
+            const s = samples[kfSi];
+            kfDecoder.decode(new EncodedVideoChunk({
+              type: 'key', timestamp: Math.round(s.pts * 1e6),
+              duration: Math.round(s.dur * 1e6), data: s.data,
+            }));
+          }
+          await kfDecoder.flush();
+          kfDecoder.close();
+          await Promise.all(bakingPromises);
+        } catch(e) {
+          if (kfDecoder.state !== 'closed') kfDecoder.close();
+        }
+      }
     }
 
     /* ════════════════════════════════════════════════════════
